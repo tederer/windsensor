@@ -30,6 +30,21 @@ The collected wind data get sent to a service evry minute in the following forma
 |anemometerPulses|array of integers|0 <= pulses <= 255|Each value in the array defines the number of anemometer pulses countered within one second|
 |directionVaneValues|array of integers|0 <= direction <= 4095|Each value in the array defines the directionthe vane was pointing to. 0 stands for 0° (north), 1024 for 90° (east), 2048 for 190° (south) and 3072 for 270° (west).|
 
-## building and upload
-getting started: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html#get-started-configure
-build system: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html?highlight=idf_component_register#adding-conditional-configuration
+## building and upload/flash
+
+To build and upload the software to  the ESP32 the following steps are necessary:
+
+1. connect your ESP32 via USB to your computer
+2. adapt the paths used in `startDevEnvInDocker.sh`
+3. start the ESP32 development environment executing `startDevEnvInDocker.sh`
+4. call `idf.py menuconfig`
+5. navigate to "Component config > windsensor > URL of the service" and set the URL
+6. save the configuration
+7. call `idf.py flash`
+
+## references
+[windsensor-service](https://github.com/tederer/windsensor-service)
+
+[ESP32 (getting started)](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html#get-started-configure)
+
+[ESP32 (build system)](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html?highlight=idf_component_register#adding-conditional-configuration)

@@ -13,4 +13,4 @@ else
    echo
 fi
 
-sudo docker run -it --env="PROJECT_ROOT=$projectRootInContainer" --volume=$projectRootInHost:$projectRootInContainer:rw $device esp32dev
+sudo docker run -it --env="PROJECT_ROOT=$projectRootInContainer" --volume=$projectRootInHost:$projectRootInContainer:rw $device tederer/esp32dev
