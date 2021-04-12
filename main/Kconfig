@@ -1,0 +1,15 @@
+    menu "windsensor"
+        config WINDSENSOR_SERVICE_URL
+            string "URL of the service"
+            default "www.my-service.com"
+            help
+                Specify the host, port and path of the service and skip the protocol.
+
+        config WINDSENSOR_WIFI_SSID
+            string "WIFI SSID"
+            default "myWifi"
+            
+        config WINDSENSOR_WIFI_PASSWORD
+            string "WIFI password"
+            default "secretPassword"
+    endmenu
