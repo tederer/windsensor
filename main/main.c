@@ -110,7 +110,7 @@ static char* createJsonPayload() {
     char *directionVaneDataPosition = directionVaneData;
  
     for (int i=0; i < MEASUREMENTS_PER_PUBLISHMENT; i++) {
-        uint32_t pulses = (*(anemometerPulses++)) & 0xffff;
+        uint32_t pulses = (*(anemometerPulses++)) & 0x00ff;
         uint32_t direction = (*(directionVaneValues++)) & 0xffff;
         sprintf(anemometerDataPosition, i < 1 ? "%d" : ",%d", pulses);
         sprintf(directionVaneDataPosition, i < 1 ? "%d" : ",%d", direction);
