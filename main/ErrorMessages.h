@@ -7,18 +7,18 @@
 void clearErrorMessages();
 
 /**
- * Returns the error messages separated by a comma.
+ * Returns the error messages separated by a separator character.
  **/
-const char* getErrorMessages();
+const char * getErrorMessages();
 
 /**
- * Returns the separator as null terminated string.
+ * Returns the separator.
  **/
-const char* getErrorMessageSeparator();
+char getErrorMessageSeparator();
 
 /**
  * Stores the provided message together with the messages provided in previous invocations.
  **/
-void addErrorMessage(const char *message);
+void addErrorMessage(char const *message);
 
 #endif

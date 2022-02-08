@@ -10,15 +10,19 @@
 
 #define UART_PORT                  UART_NUM_2
 #define IO_PIN_FOR_PWRKEY          GPIO_NUM_2
+#define IO_PIN_FOR_RELAIS          GPIO_NUM_4
 #define MILLIS_PER_SECOND          1000
 #define SECONDS(value)             (value * MILLIS_PER_SECOND) 
-#define PWR_PIN_HIGH_DURATION_MS   SECONDS(1.6)
+#define PWR_PIN_HIGH_DURATION      SECONDS(1.6)
+#define RELAIS_ACTIVE_DURATION     SECONDS(1)
 #define CR                         0x0d
 #define LF                         0x0a
 #define PIPE_CHAR                  0x7c
 #define CRLF                       "\r\n"
 #define RESPONSE_BUFFER_SIZE       128
 #define OK_RESPONSE                "OK"
+#define NULL_BYTE_LENGTH           1
+#define MAX_INPUT_TIME_MS          3000
 
 typedef struct {
    int count;
@@ -78,10 +82,11 @@ static void initUart() {
 static void sendCommand(const char* message) {
    int messageLength = strlen(message);
    ESP_LOGI(GSM_MODULE_TAG, "out: \"%s\"", message);
-   char messageWithCr[messageLength + 1];
+   char *messageWithCr = malloc(messageLength + 1);
    strcpy(messageWithCr, message); 
    messageWithCr[messageLength] = CR;
    uart_write_bytes(UART_PORT, messageWithCr, messageLength + 1);
+   free(messageWithCr);
 }
 
 static bool readNextByte(uint8_t *data, TickType_t timeoutInMs) {
@@ -178,15 +183,15 @@ static int countExpectedResponses(const char *expectedResponses) {
  */
 static GsmStatus assertResponse(const char *expectedResponses, TickType_t timeoutInMs) {
    char buffer[RESPONSE_BUFFER_SIZE];
+   TickType_t ticksAtStart       = xTaskGetTickCount();
+   TickType_t passedMilliseconds = 0;
    bool timedOut                 = false;
    bool expectedResponseReceived = false;
    bool atLeastOneLineReceived   = false;
-   TickType_t ticksAtStart       = xTaskGetTickCount();
-   TickType_t passedMilliseconds = 0;
    int responseCount             = countExpectedResponses(expectedResponses);
-   char *allowedResponses[responseCount];
-   char copyOfExpectedResponses[responseCount > 0 ? strlen(expectedResponses) : 0];
-      
+   char **allowedResponses       = malloc(responseCount * sizeof(char*));
+   char *copyOfExpectedResponses = malloc((responseCount > 0 ? strlen(expectedResponses) : 0) + NULL_BYTE_LENGTH);
+         
    if (responseCount > 0) {
       strcpy(copyOfExpectedResponses, expectedResponses);
 
@@ -216,6 +221,10 @@ static GsmStatus assertResponse(const char *expectedResponses, TickType_t timeou
    if (atLeastOneLineReceived) {
       status = expectedResponseReceived ? GSM_OK : GSM_TIMEOUT;
    }
+
+   free(allowedResponses);
+   free(copyOfExpectedResponses);
+
    return status;
 }
 
@@ -300,11 +309,30 @@ static void initPwrKeyPin() {
    ESP_LOGI(GSM_MODULE_TAG, "initialized pwrkey pin and set it to low");
 }
 
+static void initRelaisPin() {
+   gpio_config_t pinConfig;
+   pinConfig.intr_type    = GPIO_INTR_DISABLE;
+   pinConfig.mode         = GPIO_MODE_OUTPUT;
+   pinConfig.pin_bit_mask = (1ULL << IO_PIN_FOR_RELAIS);
+   pinConfig.pull_down_en = GPIO_PULLDOWN_ENABLE;
+   pinConfig.pull_up_en   = GPIO_PULLUP_DISABLE;
+   ESP_ERROR_CHECK(gpio_config(&pinConfig));
+   ESP_ERROR_CHECK(gpio_set_level(IO_PIN_FOR_PWRKEY, 0));
+   ESP_LOGI(GSM_MODULE_TAG, "initialized relais pin and set it to low");
+}
+
 static void setPwrPinHighFor(int durationInMs) {
    ESP_LOGI(GSM_MODULE_TAG, "setting pwr pin to high for %d ms", durationInMs);
    ESP_ERROR_CHECK(gpio_set_level(IO_PIN_FOR_PWRKEY, 1));
    sleep( durationInMs);
    ESP_ERROR_CHECK(gpio_set_level(IO_PIN_FOR_PWRKEY, 0));
+}
+
+static void activateRelaisFor(int durationInMs) {
+   ESP_LOGI(GSM_MODULE_TAG, "setting relais pin to high for %d ms", durationInMs);
+   ESP_ERROR_CHECK(gpio_set_level(IO_PIN_FOR_RELAIS, 1));
+   sleep( durationInMs);
+   ESP_ERROR_CHECK(gpio_set_level(IO_PIN_FOR_RELAIS, 0));
 }
 
 static void waitTillGsmModuleAcceptsPowerKey() {
@@ -325,7 +353,7 @@ static bool waitForGsmModuleToGetAvailable() {
    
    // it is necessary to repeat it twice because the GSM module could already be available -> then it needs to be restarted to be in a defined state
    for(int retry = 0; retry < 2 && !gsmModuleReplied; retry++) {
-      setPwrPinHighFor(PWR_PIN_HIGH_DURATION_MS);
+      setPwrPinHighFor(PWR_PIN_HIGH_DURATION);
 
       for(int i = 0; i < 5 && !gsmModuleReplied; i++) {
          sendCommand("AT");
@@ -388,7 +416,7 @@ static void powerOffGsmModule() {
 
    if (status != GSM_OK) {
       ESP_LOGI(GSM_MODULE_TAG, "--- power off via pin ...");
-      setPwrPinHighFor(PWR_PIN_HIGH_DURATION_MS);
+      setPwrPinHighFor(PWR_PIN_HIGH_DURATION);
       assertResponse("NORMAL POWER DOWN", SECONDS(5));
    }
 }
@@ -399,9 +427,9 @@ int charCountOf(int number) {
 
 bool sendHttpPostRequest(const char* url, const char* data) {
    bool sentSuccessfully = false;
-   char urlCommand[strlen(url) + strlen("AT+HTTPPARA=\"URL\",\"\"") + 1];
+   int urlCommandLength  = strlen(url) + strlen("AT+HTTPPARA=\"URL\",\"\"") + NULL_BYTE_LENGTH;
+   char *urlCommand      = malloc(urlCommandLength);
    sprintf(urlCommand, "AT+HTTPPARA=\"URL\",\"%s\"", url);
-   int maxInputTimeInMs = 3000;
    
    const AT_COMMANDS configureHttpCommands = { 3, (const char*[]) {        
       "AT+HTTPPARA=\"CID\",1",
@@ -413,11 +441,13 @@ bool sendHttpPostRequest(const char* url, const char* data) {
 
    ESP_LOGI(GSM_MODULE_TAG, "--- triggering HTTP POST action ...");
    if(executeCommands(&configureHttpCommands)) {
-      int dataLength = strlen(data);
-      char dataCommand[strlen(data + strlen("AT+HTTPDATA=,")) + charCountOf(dataLength) + charCountOf(maxInputTimeInMs)];
-      sprintf(dataCommand, "AT+HTTPDATA=%d,%d", dataLength, maxInputTimeInMs);
+      int dataLength        = strlen(data);
+      int dataCommandLength = dataLength + strlen("AT+HTTPDATA=,") + charCountOf(dataLength) + charCountOf(MAX_INPUT_TIME_MS) + NULL_BYTE_LENGTH;
+      char *dataCommand     = malloc(dataCommandLength);
+      sprintf(dataCommand, "AT+HTTPDATA=%d,%d", dataLength, MAX_INPUT_TIME_MS);
       sendCommand(dataCommand);
-   
+      free(dataCommand);
+
       if(assertResponse("DOWNLOAD", SECONDS(1)) == GSM_OK) {
          sendCommand(data);
          if (assertOkResponse() == GSM_OK) {
@@ -425,6 +455,7 @@ bool sendHttpPostRequest(const char* url, const char* data) {
          }
       }
    }
+   free(urlCommand);
 
    if (!sentSuccessfully) {
       addErrorMessage("GSM_MODULE_FAILED_TO_SEND_HTTP_POST_REQUEST");
@@ -433,21 +464,37 @@ bool sendHttpPostRequest(const char* url, const char* data) {
    return sentSuccessfully;
 }
 
+static bool activateGsmModule() {
+   bool moduleIsAvailable = false;
+
+   size_t maxRetries = 2;
+   for (size_t retry = 0; retry < maxRetries && !moduleIsAvailable; retry++) {
+      moduleIsAvailable = waitForGsmModuleToGetAvailable();
+      if (!moduleIsAvailable && (retry < (maxRetries -1))) {
+         activateRelaisFor(RELAIS_ACTIVE_DURATION);
+      }
+   }
+
+   return moduleIsAvailable;
+}
+
 int send(const char* url, const char* data)
 {        
-   int statusCode = 0;
+   int httpStatusCode = 0;
    responseBuffer[0] = 0;
 
    if (!uartAndGpioInitialized) {
+      ESP_LOGI(GSM_MODULE_TAG, "--- initializing IO pins and UART ...");
       uartAndGpioInitialized = true;
       initPwrKeyPin();
+      initRelaisPin();
       initUart();
    }
 
    waitTillGsmModuleAcceptsPowerKey();
    ESP_ERROR_CHECK(uart_flush(UART_PORT));
    
-   if (waitForGsmModuleToGetAvailable()) {
+   if (activateGsmModule()) {
       ESP_LOGI(GSM_MODULE_TAG, "--- initializing bearer ...");
       if (!executeCommands(&initBearerCommands)) {
          addErrorMessage("GSM_MODULE_FAILED_TO_INIT_BEARER");
@@ -458,7 +505,7 @@ int send(const char* url, const char* data)
          } else {
             sendHttpPostRequest(url, data);
             ESP_LOGI(GSM_MODULE_TAG, "--- waiting for HTTP response ...");
-            statusCode = waitForHttpStatusCode();
+            httpStatusCode = waitForHttpStatusCode();
             ESP_LOGI(GSM_MODULE_TAG, "--- terminating HTTP ...");
             executeCommands(&terminateHttpCommands);
          }
@@ -468,5 +515,5 @@ int send(const char* url, const char* data)
    }
 
    powerOffGsmModule();
-   return statusCode;
+   return httpStatusCode;
 }
