@@ -36,8 +36,8 @@ typedef enum stat {
    GSM_NOTHING_RECEIVED
 } GsmStatus;
 
-char responseBuffer[RESPONSE_BUFFER_SIZE];
-bool uartAndGpioInitialized = false;
+static char responseBuffer[RESPONSE_BUFFER_SIZE];
+static bool uartAndGpioInitialized = false;
 
 static const char* GSM_MODULE_TAG = "GSM-module";
 
@@ -94,22 +94,25 @@ static bool readNextByte(uint8_t *data, TickType_t timeoutInMs) {
    return readByteCount == 1;
 }
 
+static bool responseBufferFull() {
+   int bytesUsed = strlen(responseBuffer) + 1;
+   return !(bytesUsed < RESPONSE_BUFFER_SIZE);
+}
+
 static GsmStatus readNextLine(char *outputBuffer, int outputBufferSize, TickType_t timeoutInMs) {
    uint8_t nextByte;
    int responseBufferIndex       = strlen(responseBuffer);
    bool lineCopiedToOutputBuffer = false;
    bool lfReceived               = false;
    bool timedOut                 = false;
-   bool responseBufferFull       = responseBufferIndex >= (RESPONSE_BUFFER_SIZE - 1);
    TickType_t passedMillis       = 0;
    TickType_t ticksAtStart       = xTaskGetTickCount();
 
-   while (!lfReceived && !timedOut && !responseBufferFull) {
+   while (!lfReceived && !timedOut && !responseBufferFull()) {
       if (readNextByte(&nextByte, timeoutInMs - passedMillis)) {
          responseBuffer[responseBufferIndex++] = nextByte;
          responseBuffer[responseBufferIndex]   = 0;
          lfReceived                            = nextByte == LF;
-         responseBufferFull                    = responseBufferIndex >= (RESPONSE_BUFFER_SIZE - 1);
       }
       passedMillis = (xTaskGetTickCount() - ticksAtStart) * portTICK_PERIOD_MS;
       timedOut = passedMillis >= timeoutInMs;
@@ -120,6 +123,9 @@ static GsmStatus readNextLine(char *outputBuffer, int outputBufferSize, TickType
       char lastChar = responseBuffer[responseBufferIndex];
       while (lastChar == 0 || lastChar == CR || lastChar == LF) {
          responseBufferIndex--;
+         if (responseBufferIndex < 0) {
+            break;
+         }
          lastChar = responseBuffer[responseBufferIndex];
       }
       responseBuffer[responseBufferIndex + 1] = 0;
@@ -130,8 +136,8 @@ static GsmStatus readNextLine(char *outputBuffer, int outputBufferSize, TickType
          start++;
       }
 
-      if (strlen(responseBuffer) > (outputBufferSize - 1)) {
-         ESP_LOGE(GSM_MODULE_TAG, "cannot copy received line (\"%s\") to outputBuffer because buffer is too small -> ignoring it.", responseBuffer);
+      if ((strlen(start) + NULL_BYTE_LENGTH) > outputBufferSize) {
+         ESP_LOGE(GSM_MODULE_TAG, "cannot copy received line (\"%s\") to outputBuffer because buffer is too small -> ignoring it.", start);
       } else {
          strcpy(outputBuffer, start);
          lineCopiedToOutputBuffer = true;
@@ -146,7 +152,7 @@ static GsmStatus readNextLine(char *outputBuffer, int outputBufferSize, TickType
       status = GSM_TIMEOUT;
    }
 
-   if (responseBufferFull) {
+   if (responseBufferFull()) {
       ESP_LOGE(GSM_MODULE_TAG, "overflow of response buffer -> flushing it (content: %s)", responseBuffer);
       responseBuffer[0] = 0;
    }
@@ -205,11 +211,9 @@ static GsmStatus assertResponse(const char *expectedResponses, TickType_t timeou
       if (readNextLine(buffer, RESPONSE_BUFFER_SIZE, timeoutInMs - passedMilliseconds) == GSM_OK && strlen(buffer) > 0) {
          ESP_LOGI(GSM_MODULE_TAG, "in:  \"%s\"", buffer);
          atLeastOneLineReceived = true;
-         bool matchFound        = false;
-         for (int i = 0; i < responseCount && !matchFound; i++) {
-               matchFound = strcmp(buffer, allowedResponses[i]) == 0;
+         for (int i = 0; i < responseCount && !expectedResponseReceived; i++) {
+               expectedResponseReceived = strcmp(buffer, allowedResponses[i]) == 0;
          }
-         expectedResponseReceived = expectedResponseReceived || matchFound;
       }
 
       passedMilliseconds = (xTaskGetTickCount() - ticksAtStart) * portTICK_PERIOD_MS;
@@ -245,32 +249,27 @@ static int waitForHttpStatusCode() {
    TickType_t passedMilliseconds = 0;
    
    while (!timedOut && !statusCodeReceived) {
-      GsmStatus status = readNextLine(buffer, RESPONSE_BUFFER_SIZE, timeoutInMs - passedMilliseconds);
-
-      if (status == GSM_OK) {
-         if (strlen(buffer) > 0) {
-               ESP_LOGI(GSM_MODULE_TAG, "in:  \"%s\"", buffer);
-         }
-         
+      if ((readNextLine(buffer, RESPONSE_BUFFER_SIZE, timeoutInMs - passedMilliseconds) == GSM_OK) && (strlen(buffer) > 0)) {
+         ESP_LOGI(GSM_MODULE_TAG, "in:  \"%s\"", buffer);
+      
          if (strstr(buffer, "+HTTPACTION:") == buffer) {
+            const char* separators[3] = {":", ",", ","};
+            char *token;
+
+            for (int i = 0; i < 3; i++) {
+               token = strtok(i == 0 ? buffer : NULL, separators[i]);
                
-               const char* separators[3] = {":", ",", ","};
-               char *token;
+               if (token == NULL) {
+                  ESP_LOGI(GSM_MODULE_TAG, "failed to parse action response (index=%d, separator=%s)", i, separators[i]);
+                  break;
+               }    
+            }
 
-               for (int i = 0; i < 3; i++) {
-                  token = strtok(i == 0 ? buffer : NULL, separators[i]);
-                  
-                  if (token == NULL) {
-                     ESP_LOGI(GSM_MODULE_TAG, "failed to parse action response (index=%d, separator=%s)", i, separators[i]);
-                     break;
-                  }    
-               }
-
-               if (token != NULL) {
-                  statusCode         = atoi(token);
-                  statusCodeReceived = true;
-                  ESP_LOGI(GSM_MODULE_TAG, "status code: %d", statusCode);
-               }       
+            if (token != NULL) {
+               statusCode         = atoi(token);
+               statusCodeReceived = true;
+               ESP_LOGI(GSM_MODULE_TAG, "status code: %d", statusCode);
+            }       
          }
       }
 
@@ -470,7 +469,8 @@ static bool activateGsmModule() {
    size_t maxRetries = 2;
    for (size_t retry = 0; retry < maxRetries && !moduleIsAvailable; retry++) {
       moduleIsAvailable = waitForGsmModuleToGetAvailable();
-      if (!moduleIsAvailable && (retry < (maxRetries -1))) {
+      if (!moduleIsAvailable && (retry < (maxRetries - 1))) {
+         ESP_LOGI(GSM_MODULE_TAG, "interrupting power supply of GSM module for %d ms ...", RELAIS_ACTIVE_DURATION);
          activateRelaisFor(RELAIS_ACTIVE_DURATION);
       }
    }
