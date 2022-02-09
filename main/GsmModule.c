@@ -14,7 +14,8 @@
 #define MILLIS_PER_SECOND          1000
 #define SECONDS(value)             (value * MILLIS_PER_SECOND) 
 #define PWR_PIN_HIGH_DURATION      SECONDS(1.6)
-#define RELAIS_ACTIVE_DURATION     SECONDS(1)
+#define RELAIS_ACTIVE_DURATION     SECONDS(2)
+#define ON_ERROR_RECORD(msg)       if (!gsmModuleReplied) {addErrorMessage(msg);return false;} 
 #define CR                         0x0d
 #define LF                         0x0a
 #define PIPE_CHAR                  0x7c
@@ -96,7 +97,7 @@ static bool readNextByte(uint8_t *data, TickType_t timeoutInMs) {
 
 static bool responseBufferFull() {
    int bytesUsed = strlen(responseBuffer) + 1;
-   return !(bytesUsed < RESPONSE_BUFFER_SIZE);
+   return bytesUsed >= RESPONSE_BUFFER_SIZE;
 }
 
 static GsmStatus readNextLine(char *outputBuffer, int outputBufferSize, TickType_t timeoutInMs) {
@@ -360,49 +361,47 @@ static bool waitForGsmModuleToGetAvailable() {
       }
    }
    
-   if (gsmModuleReplied) {
-      sendCommand("ATE0");
-      gsmModuleReplied = assertOkResponse() == GSM_OK;
-   }
+   ON_ERROR_RECORD("GSM_MODULE_NO_ANSWER_FOR_AT_CMD")
 
-   if (gsmModuleReplied) {
-      ESP_LOGI(GSM_MODULE_TAG, "--- waiting for READY message");
-      gsmModuleReplied = assertResponse("+CPIN: READY", SECONDS(5)) == GSM_OK;
-   }
-
-   if (!gsmModuleReplied) {
-      addErrorMessage("GSM_MODULE_DID_NOT_REPLY");
-   } else {
-      bool timedOut               = false;
-      TickType_t timeoutInMs      = SECONDS(20);
-      TickType_t passedMillis     = 0;
-      TickType_t ticksAtStart     = xTaskGetTickCount();
-      int nothingReceivedCount    = 0;
-      int maxNothingReceivedCount = 2;
-
-      ESP_LOGI(GSM_MODULE_TAG, "--- waiting for network registration");
-
-      while(!timedOut && !registeredSuccessfully && nothingReceivedCount < maxNothingReceivedCount) {
-         sendCommand("AT+CREG?");
-         GsmStatus status = assertResponse("+CREG: 0,1|+CREG: 0,5", min(SECONDS(1), timeoutInMs - passedMillis));
-         if (status == GSM_OK) {
-               status = assertOkResponse();
-         }
-         registeredSuccessfully = status == GSM_OK;
-         nothingReceivedCount   = status == GSM_NOTHING_RECEIVED ? nothingReceivedCount + 1 : 0;
-         
-         if (!registeredSuccessfully && nothingReceivedCount < maxNothingReceivedCount) {
-               passedMillis = (xTaskGetTickCount() - ticksAtStart) * portTICK_PERIOD_MS;
-               sleep(min(SECONDS(1), timeoutInMs - passedMillis));    
-         }
+   sendCommand("ATE0");
+   gsmModuleReplied = assertOkResponse() == GSM_OK;
+   
+   ON_ERROR_RECORD("GSM_MODULE_NO_ANSWER_FOR_ATE0_CMD")
       
-         passedMillis = (xTaskGetTickCount() - ticksAtStart) * portTICK_PERIOD_MS;
-         timedOut     = passedMillis >= timeoutInMs;
-      }
+   ESP_LOGI(GSM_MODULE_TAG, "--- waiting for READY message");
+   gsmModuleReplied = assertResponse("+CPIN: READY", SECONDS(5)) == GSM_OK;
+   
+   ON_ERROR_RECORD("GSM_MODULE_DID_NOT_SEND_READY")
+   
+   bool timedOut               = false;
+   TickType_t timeoutInMs      = SECONDS(20);
+   TickType_t passedMillis     = 0;
+   TickType_t ticksAtStart     = xTaskGetTickCount();
+   int nothingReceivedCount    = 0;
+   int maxNothingReceivedCount = 2;
 
-      if (!registeredSuccessfully) {
-         addErrorMessage("GSM_MODULE_DID_NOT_REGISTER");
+   ESP_LOGI(GSM_MODULE_TAG, "--- waiting for network registration");
+
+   while(!timedOut && !registeredSuccessfully && nothingReceivedCount < maxNothingReceivedCount) {
+      sendCommand("AT+CREG?");
+      GsmStatus status = assertResponse("+CREG: 0,1|+CREG: 0,5", min(SECONDS(1), timeoutInMs - passedMillis));
+      if (status == GSM_OK) {
+            status = assertOkResponse();
       }
+      registeredSuccessfully = status == GSM_OK;
+      nothingReceivedCount   = status == GSM_NOTHING_RECEIVED ? nothingReceivedCount + 1 : 0;
+      
+      if (!registeredSuccessfully && nothingReceivedCount < maxNothingReceivedCount) {
+            passedMillis = (xTaskGetTickCount() - ticksAtStart) * portTICK_PERIOD_MS;
+            sleep(min(SECONDS(1), timeoutInMs - passedMillis));    
+      }
+   
+      passedMillis = (xTaskGetTickCount() - ticksAtStart) * portTICK_PERIOD_MS;
+      timedOut     = passedMillis >= timeoutInMs;
+   }
+
+   if (!registeredSuccessfully) {
+      addErrorMessage("GSM_MODULE_DID_NOT_REGISTER");
    }
 
    return registeredSuccessfully;
@@ -471,7 +470,9 @@ static bool activateGsmModule() {
       moduleIsAvailable = waitForGsmModuleToGetAvailable();
       if (!moduleIsAvailable && (retry < (maxRetries - 1))) {
          ESP_LOGI(GSM_MODULE_TAG, "interrupting power supply of GSM module for %d ms ...", RELAIS_ACTIVE_DURATION);
+         addErrorMessage("GSM_MODULE_INTERRUPT_POWER");
          activateRelaisFor(RELAIS_ACTIVE_DURATION);
+         waitTillGsmModuleAcceptsPowerKey();
       }
    }
 

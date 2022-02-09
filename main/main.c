@@ -81,7 +81,6 @@ static void valueCollectorTask(void* arg)
          size_t index = nextIndex++;
          anemometerPulses[index]    = pulses;
          directionVaneValues[index] = directionVaneValue;
-         ESP_LOGI(TAG, "[%02d] pulses = %d, direction = %04x", nextIndex - 1, pulses, directionVaneValue);
       }
 
       if (nextIndex >= MEASUREMENTS_PER_PUBLISHMENT) {
@@ -102,14 +101,14 @@ static void resetMeasuredValues() {
 }
 
 static void sendMeasuredValuesToServer() {
+   ESP_LOGI(TAG, "-----------------------------------------------------------------");
    const char* errorMessages = getErrorMessages();
    if (strlen(errorMessages) > 0) {
       ESP_LOGW(TAG, "not yet delivered errorMessages = %s", errorMessages);
    }
 
    char* jsonMessage = createJsonPayload(anemometerPulses, directionVaneValues, MEASUREMENTS_PER_PUBLISHMENT);
-   ESP_LOGI(TAG, "JSON message = %s", jsonMessage);
-
+   
    int httpResponseCode = 0;
    for (int retries = 0; retries < 2 && httpResponseCode != OK_RESPONSE; retries++) {
       

@@ -15,6 +15,7 @@ void clearErrorMessages() {
 }
 
 const char * getErrorMessages() {
+   errorMessages[errorMessagesLength] = 0;
    return errorMessages;
 }
 
