@@ -13,7 +13,7 @@
 #define IO_PIN_FOR_RELAIS          GPIO_NUM_4
 #define MILLIS_PER_SECOND          1000
 #define SECONDS(value)             (value * MILLIS_PER_SECOND) 
-#define PWR_PIN_HIGH_DURATION      SECONDS(1.6)
+#define PWR_PIN_HIGH_DURATION      SECONDS(2)
 #define RELAIS_ACTIVE_DURATION     SECONDS(2)
 #define ON_ERROR_RECORD(msg)       if (!gsmModuleReplied) {addErrorMessage(msg);return false;} 
 #define CR                         0x0d
@@ -39,6 +39,7 @@ typedef enum stat {
 
 static char responseBuffer[RESPONSE_BUFFER_SIZE];
 static bool uartAndGpioInitialized = false;
+static bool baudrateConfigured     = false;
 
 static const char* GSM_MODULE_TAG = "GSM-module";
 
@@ -346,40 +347,39 @@ static TickType_t min(TickType_t a, TickType_t b) {
 }
 
 static bool waitForGsmModuleToGetAvailable() {
-   bool gsmModuleReplied       = false;
-   bool registeredSuccessfully = false;
-   
    ESP_LOGI(GSM_MODULE_TAG, "--- waiting for GSM module to get available ...");
+   bool gsmModuleReplied = false;
    
    // it is necessary to repeat it twice because the GSM module could already be available -> then it needs to be restarted to be in a defined state
    for(int retry = 0; retry < 2 && !gsmModuleReplied; retry++) {
       setPwrPinHighFor(PWR_PIN_HIGH_DURATION);
-
-      for(int i = 0; i < 5 && !gsmModuleReplied; i++) {
-         sendCommand("AT");
-         gsmModuleReplied = assertOkResponse() == GSM_OK;
-      }
+      gsmModuleReplied = assertResponse("RDY", 5000) == GSM_OK;
    }
    
-   ON_ERROR_RECORD("GSM_MODULE_NO_ANSWER_FOR_AT_CMD")
+   ON_ERROR_RECORD("GSM_MODULE_DID_NOT_SEND_RDY")
 
+   ESP_LOGI(GSM_MODULE_TAG, "--- waiting for READY message");
+   gsmModuleReplied = assertResponse("+CPIN: READY", SECONDS(5)) == GSM_OK;
+   
+   ON_ERROR_RECORD("GSM_MODULE_DID_NOT_SEND_CPIN_READY");
+   
    sendCommand("ATE0");
    gsmModuleReplied = assertOkResponse() == GSM_OK;
    
    ON_ERROR_RECORD("GSM_MODULE_NO_ANSWER_FOR_ATE0_CMD")
       
-   ESP_LOGI(GSM_MODULE_TAG, "--- waiting for READY message");
-   gsmModuleReplied = assertResponse("+CPIN: READY", SECONDS(5)) == GSM_OK;
-   
-   ON_ERROR_RECORD("GSM_MODULE_DID_NOT_SEND_READY")
-   
+   return true;
+}
+
+static bool waitForNetworkRegistration() {
    bool timedOut               = false;
    TickType_t timeoutInMs      = SECONDS(20);
    TickType_t passedMillis     = 0;
    TickType_t ticksAtStart     = xTaskGetTickCount();
    int nothingReceivedCount    = 0;
    int maxNothingReceivedCount = 2;
-
+   bool registeredSuccessfully = false;
+   
    ESP_LOGI(GSM_MODULE_TAG, "--- waiting for network registration");
 
    while(!timedOut && !registeredSuccessfully && nothingReceivedCount < maxNothingReceivedCount) {
@@ -388,8 +388,8 @@ static bool waitForGsmModuleToGetAvailable() {
       if (status == GSM_OK) {
             status = assertOkResponse();
       }
-      registeredSuccessfully = status == GSM_OK;
-      nothingReceivedCount   = status == GSM_NOTHING_RECEIVED ? nothingReceivedCount + 1 : 0;
+      registeredSuccessfully = (status == GSM_OK);
+      nothingReceivedCount   = (status == GSM_NOTHING_RECEIVED) ? nothingReceivedCount + 1 : 0;
       
       if (!registeredSuccessfully && nothingReceivedCount < maxNothingReceivedCount) {
             passedMillis = (xTaskGetTickCount() - ticksAtStart) * portTICK_PERIOD_MS;
@@ -474,9 +474,54 @@ static bool activateGsmModule() {
          activateRelaisFor(RELAIS_ACTIVE_DURATION);
          waitTillGsmModuleAcceptsPowerKey();
       }
+      if(moduleIsAvailable) {
+         moduleIsAvailable = waitForNetworkRegistration();
+      }
    }
 
    return moduleIsAvailable;
+}
+
+static void configureBaudrateOfGsmModule() {
+   ESP_LOGI(GSM_MODULE_TAG, "--- setting baudrate of gsm module to 115200 ...");
+   
+   ESP_ERROR_CHECK(uart_flush(UART_PORT));
+   waitTillGsmModuleAcceptsPowerKey();
+   
+   GsmStatus status = GSM_ERROR;
+
+   for(int iteration = 1; (status != GSM_OK) && (iteration < 3); iteration++) {
+      setPwrPinHighFor(PWR_PIN_HIGH_DURATION);
+      sleep(4000);
+      for(int i = 0; i < 5 && (status != GSM_OK); i++) {
+         sendCommand("AT");
+         status = assertOkResponse();
+      }
+      if (status == GSM_OK) {
+         status = GSM_ERROR;
+         
+         for(int i = 0; i < 3 && status != GSM_OK; i++) {
+            sendCommand("AT+IPR=115200");
+            status = assertOkResponse();
+         }
+         if (status == GSM_OK) {
+            sendCommand("AT+IPR?");
+            status = assertResponse("+IPR: 115200", 1000);
+         }
+         if (status == GSM_OK) {
+            sendCommand("AT&W");
+            status = assertOkResponse();
+         }
+      }
+   }
+
+   baudrateConfigured = (status == GSM_OK);
+   if (baudrateConfigured) {
+      ESP_LOGI(GSM_MODULE_TAG, "successfully set baudrate of gsm module");
+   } else {
+      addErrorMessage("GSM_MODULE_FAILED_TO_SET_BAUDRATE");
+      ESP_LOGE(GSM_MODULE_TAG, "failed to set baudrate of gsm module");   
+   }   
 }
 
 int send(const char* url, const char* data)
@@ -492,10 +537,13 @@ int send(const char* url, const char* data)
       initUart();
    }
 
-   waitTillGsmModuleAcceptsPowerKey();
+   if (!baudrateConfigured) {
+      configureBaudrateOfGsmModule();
+   }
+
    ESP_ERROR_CHECK(uart_flush(UART_PORT));
    
-   if (activateGsmModule()) {
+   if (baudrateConfigured && activateGsmModule()) {
       ESP_LOGI(GSM_MODULE_TAG, "--- initializing bearer ...");
       if (!executeCommands(&initBearerCommands)) {
          addErrorMessage("GSM_MODULE_FAILED_TO_INIT_BEARER");
