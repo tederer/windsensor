@@ -1,4 +1,3 @@
-#include <math.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -7,6 +6,7 @@
 
 #include "ErrorMessages.h"
 #include "GsmModule.h"
+#include "Utils.h"
 
 #define UART_PORT                  UART_NUM_2
 #define IO_PIN_FOR_PWRKEY          GPIO_NUM_2
@@ -367,7 +367,7 @@ static bool waitForGsmModuleToGetAvailable() {
    gsmModuleReplied = assertOkResponse() == GSM_OK;
    
    ON_ERROR_RECORD("GSM_MODULE_NO_ANSWER_FOR_ATE0_CMD")
-      
+
    return true;
 }
 
@@ -417,10 +417,6 @@ static void powerOffGsmModule() {
       setPwrPinHighFor(PWR_PIN_HIGH_DURATION);
       assertResponse("NORMAL POWER DOWN", SECONDS(5));
    }
-}
-
-int charCountOf(int number) {
-   return ceil(log10(number));
 }
 
 bool sendHttpPostRequest(const char* url, const char* data) {
@@ -483,45 +479,79 @@ static bool activateGsmModule() {
 }
 
 static void configureBaudrateOfGsmModule() {
-   ESP_LOGI(GSM_MODULE_TAG, "--- setting baudrate of gsm module to 115200 ...");
+   ESP_LOGI(GSM_MODULE_TAG, "--- setting fixed baudrate of gsm module ...");
    
    ESP_ERROR_CHECK(uart_flush(UART_PORT));
    waitTillGsmModuleAcceptsPowerKey();
    
    GsmStatus status = GSM_ERROR;
 
-   for(int iteration = 1; (status != GSM_OK) && (iteration < 3); iteration++) {
+   ESP_LOGI(GSM_MODULE_TAG, "checking if gsm modules replies with 19200 ...");
+   ESP_ERROR_CHECK(uart_set_baudrate(UART_PORT, 19200));
+   // it is necessary to repeat it twice because the GSM module could already be available -> then it needs to be restarted to be in a defined state
+   for(int i = 0; (i < 2) && (status != GSM_OK); i++) {
       setPwrPinHighFor(PWR_PIN_HIGH_DURATION);
-      sleep(4000);
-      for(int i = 0; i < 5 && (status != GSM_OK); i++) {
-         sendCommand("AT");
+      status = assertResponse("RDY", 5000);
+   }
+
+   if (status != GSM_OK) {
+      ESP_LOGI(GSM_MODULE_TAG, "no RDY received at 19200 -> trying auto baud detection at 115200 ...");
+      ESP_ERROR_CHECK(uart_set_baudrate(UART_PORT, 115200));
+      // it is necessary to repeat it twice because the GSM module could already be available -> then it needs to be restarted to be in a defined state
+      for (int i = 0; (i < 2) && (status != GSM_OK); i++) {
+         setPwrPinHighFor(PWR_PIN_HIGH_DURATION);
+         for(int j = 0; (j < 10) && (status != GSM_OK); j++) {
+            sendCommand("AT");
+            status = assertResponse("OK", 500);
+         }
+      }
+   }
+
+   if (status == GSM_OK) {
+      status = GSM_ERROR;
+      
+      sendCommand("ATE0");
+      status = assertOkResponse();
+      
+      if (status == GSM_OK) {
+         sendCommand("AT+IPR=19200");
          status = assertOkResponse();
       }
+
+      ESP_ERROR_CHECK(uart_set_baudrate(UART_PORT, 19200));
+      
       if (status == GSM_OK) {
-         status = GSM_ERROR;
-         
-         for(int i = 0; i < 3 && status != GSM_OK; i++) {
-            sendCommand("AT+IPR=115200");
-            status = assertOkResponse();
-         }
-         if (status == GSM_OK) {
-            sendCommand("AT+IPR?");
-            status = assertResponse("+IPR: 115200", 1000);
-         }
-         if (status == GSM_OK) {
-            sendCommand("AT&W");
-            status = assertOkResponse();
-         }
+         sendCommand("AT+IPR?");
+         status = assertResponse("+IPR: 19200", 1000);
+      }
+      if (status == GSM_OK) {
+         sendCommand("AT&W");
+         status = assertOkResponse();
       }
    }
 
    baudrateConfigured = (status == GSM_OK);
    if (baudrateConfigured) {
       ESP_LOGI(GSM_MODULE_TAG, "successfully set baudrate of gsm module");
+      powerOffGsmModule();
    } else {
       addErrorMessage("GSM_MODULE_FAILED_TO_SET_BAUDRATE");
       ESP_LOGE(GSM_MODULE_TAG, "failed to set baudrate of gsm module");   
    }   
+}
+
+void initializeGsmModule() {
+   if (!uartAndGpioInitialized) {
+      ESP_LOGI(GSM_MODULE_TAG, "--- initializing IO pins and UART ...");
+      initPwrKeyPin();
+      initRelaisPin();
+      initUart();
+      uartAndGpioInitialized = true;
+   }
+
+   if (!baudrateConfigured) {
+      configureBaudrateOfGsmModule();
+   }
 }
 
 int send(const char* url, const char* data)
@@ -529,18 +559,8 @@ int send(const char* url, const char* data)
    int httpStatusCode = 0;
    responseBuffer[0] = 0;
 
-   if (!uartAndGpioInitialized) {
-      ESP_LOGI(GSM_MODULE_TAG, "--- initializing IO pins and UART ...");
-      uartAndGpioInitialized = true;
-      initPwrKeyPin();
-      initRelaisPin();
-      initUart();
-   }
-
-   if (!baudrateConfigured) {
-      configureBaudrateOfGsmModule();
-   }
-
+   initializeGsmModule();
+   
    ESP_ERROR_CHECK(uart_flush(UART_PORT));
    
    if (baudrateConfigured && activateGsmModule()) {

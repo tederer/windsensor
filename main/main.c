@@ -43,7 +43,6 @@ static const char* TAG                       = "main";
 static const char* HTTP_RESPONSE_TIMED_OUT   = "HTTP_RESPONSE_TIMED_OUT";
 
 static void resetMeasuredValues();
-static void initializePins();
 static void initializeAnemometerInputPin();
 static void initializeDirectionVanePin();
 static void sendMeasuredValuesToServer();
@@ -55,17 +54,21 @@ size_t nextIndex = 0;
 uint16_t pulseCount;
 
 static xQueueHandle anemometerQueue;
-static bool sendNextValues = false;
+static bool sendMeasuredValues = false;
+
+static void sleepMs(TickType_t durationInMs) {
+   vTaskDelay( durationInMs / portTICK_PERIOD_MS);
+}
 
 static void debouceTask(void* arg)
 {
    uint8_t value;
-   size_t debounceDelayInTicks = (1000 / MAX_PULSES_PER_SECOND) / portTICK_RATE_MS;
+   size_t debounceDelayInMs = 1000 / MAX_PULSES_PER_SECOND;
    
    for(;;) {
       if(xQueueReceive(anemometerQueue, &value, 500 / portTICK_RATE_MS)) {
          pulseCount++;
-         vTaskDelay(debounceDelayInTicks);
+         sleepMs(debounceDelayInMs);
          xQueueReceive(anemometerQueue, &value, 0);
       }
    }
@@ -75,7 +78,7 @@ static void valueCollectorTask(void* arg)
 {
    for(;;) {
       pulseCount = 0;
-      vTaskDelay(1000 / portTICK_RATE_MS);
+      sleepMs(1000);
 
       uint16_t pulses         = pulseCount;
       int directionVaneValue  = adc1_get_raw(ADC1_CHANNEL_6) & 0xfff;
@@ -85,9 +88,9 @@ static void valueCollectorTask(void* arg)
          anemometerPulses[index]    = pulses;
          directionVaneValues[index] = directionVaneValue;
       } else {
-         sendNextValues = true;
-         while(sendNextValues) {
-            vTaskDelay(100 / portTICK_RATE_MS);
+         sendMeasuredValues = true;
+         while(sendMeasuredValues) {
+            sleepMs(100);
          }
          resetMeasuredValues();
          nextIndex = 0;
@@ -110,7 +113,7 @@ static void sendMeasuredValuesToServer() {
    }
 
    char* jsonMessage = createJsonPayload(anemometerPulses, directionVaneValues, MEASUREMENTS_PER_PUBLISHMENT);
-   ESP_LOGW(TAG, "json message length = %d", strlen(jsonMessage));
+   ESP_LOGI(TAG, "json message length = %d", strlen(jsonMessage));
 
    int httpResponseCode = 0;
    for (int retries = 0; retries < 2 && httpResponseCode != OK_RESPONSE; retries++) {
@@ -136,33 +139,30 @@ static void sendMeasuredValuesToServer() {
 }
 
 void app_main() {   
-   esp_deep_sleep_disable_rom_logging(); // suppress boot messages
-   pulseCount     = 0;
+   pulseCount = 0;
    resetMeasuredValues();
    
+   sleepMs(2000);
+   initializeGsmModule();
+
    anemometerQueue = xQueueCreate(1, sizeof(uint8_t));
    if (anemometerQueue == NULL) {
       ESP_LOGE(TAG, "failed to create queue for anemometer pulses");
    }
    xTaskCreate(debouceTask, "anemometerInputDebouceTask", 2048, NULL, 10, NULL);
       
-   initializePins();
+   initializeAnemometerInputPin();
+   initializeDirectionVanePin();
 
    xTaskCreate(valueCollectorTask, "valueCollectorTask", 2048, NULL, 10, NULL);
 
    for(;;) {
-      vTaskDelay(250 / portTICK_RATE_MS);
-      if (sendNextValues) {
+      sleepMs(250);
+      if (sendMeasuredValues) {
          sendMeasuredValuesToServer();
-         sendNextValues = false;
+         sendMeasuredValues = false;
       }
    }
-}
-
-static void initializePins()
-{
-   initializeAnemometerInputPin();
-   initializeDirectionVanePin();
 }
 
 static void IRAM_ATTR onAnemometerPulse(void* arg)

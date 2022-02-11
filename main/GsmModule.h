@@ -6,4 +6,10 @@
  **/
 int send(const char* url, const char* data);
 
+/**
+ * Initializes the serial connection to the GSM module and also the GSM module itself. This method gets called
+ * automatically when you call send(...).
+ */
+void initializeGsmModule();
+
 #endif
