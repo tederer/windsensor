@@ -10,7 +10,7 @@ The sensor evaluates the wind speed (pulses of the anemometer) and direction (he
 
 ## schematic
 
-![schematic](schematic.svg)
+![schematic](schematic.png)
 
 ## Output message format
 
