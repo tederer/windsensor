@@ -30,7 +30,7 @@ void addErrorMessage(char const *message) {
    
    if (newErrorMessagesLength <= MAX_ERROR_MESSAGES_LENGTH) {
       const char *inputChar   = message;
-      char *outputChar        = &errorMessages[strlen(errorMessages)];
+      char *outputChar        = &errorMessages[errorMessagesLength];
 
       if (errorMessagesLength > 0) {
          *outputChar = ERROR_MESSAGE_SEPARATOR;
