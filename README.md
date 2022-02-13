@@ -5,6 +5,8 @@ This wind sensor consists of the following hardware components:
 * Davis Vantage Pro 2 anemometer and direction vane
 * ESP32 Microcontroller
 * Waveshare SIM800C GSM/GPRS HAT
+* Mean Well RS-25-5 AC/DC power supply, 5A 25W 5V/DC
+* optional: Finder print relay 30.22.7 5V
 
 The sensor evaluates the wind speed (pulses of the anemometer) and direction (heading of the vane) every second and stored them for later delivery. Every minute, the collected data get sent to a service on the internet.
 
