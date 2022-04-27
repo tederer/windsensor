@@ -235,7 +235,7 @@ static GsmStatus assertResponse(const char *expectedResponses, TickType_t timeou
 }
 
 static GsmStatus assertOkResponse() {
-   return assertResponse("OK", SECONDS(1));
+   return assertResponse("OK", SECONDS(5));
 }
 
 /**
