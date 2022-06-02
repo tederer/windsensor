@@ -18,6 +18,8 @@
 #define ON_ERROR_RECORD(msg)       if (!gsmModuleReplied) {addErrorMessage(msg);return false;} 
 #define CR                         0x0d
 #define LF                         0x0a
+#define SPACE                      0x20
+#define COLON                      0x3A
 #define PIPE_CHAR                  0x7c
 #define CRLF                       "\r\n"
 #define RESPONSE_BUFFER_SIZE       128
@@ -238,6 +240,49 @@ static GsmStatus assertOkResponse() {
    return assertResponse("OK", SECONDS(5));
 }
 
+static bool isRedirection(int statusCode) {
+   return statusCode == 301 || statusCode == 302 || statusCode == 303 || statusCode == 307 || statusCode == 308;
+}
+
+static void logRedirectionLocation(int statusCode) {
+   if (isRedirection(statusCode)) {  
+      char buffer[RESPONSE_BUFFER_SIZE];
+      bool timedOut                 = false;
+      bool okReceived               = false;
+      TickType_t timeoutInMs        = SECONDS(10);
+      TickType_t ticksAtStart       = xTaskGetTickCount();
+      TickType_t passedMilliseconds = 0;
+      
+      sendCommand("AT+HTTPHEAD");
+      
+      while (!timedOut && !okReceived) {
+         if ((readNextLine(buffer, RESPONSE_BUFFER_SIZE, timeoutInMs - passedMilliseconds) == GSM_OK) && (strlen(buffer) > 0)) {
+            ESP_LOGI(GSM_MODULE_TAG, "in:  \"%s\"", buffer);
+            okReceived = (strstr(buffer, "OK") == buffer);
+            if ((strstr(buffer, "location") != NULL) || (strstr(buffer, "Location") != NULL)) {
+               char *start = buffer;
+               while(*start != 0 && *start != COLON) {
+                  start++;
+               }
+               if (*start == COLON) {
+                  start++;
+               }
+               while(*start != 0 && *start == SPACE) {
+                  start++;
+               }
+               if (strlen(start) > 0) {
+                  addErrorMessage(start);
+               }
+            }
+         }
+
+         passedMilliseconds = (xTaskGetTickCount() - ticksAtStart) * portTICK_PERIOD_MS;
+         timedOut = passedMilliseconds >= timeoutInMs;
+      }
+   }
+}
+
+
 /**
  * Returns the HTTP status code or -1 if no response received.
  */
@@ -271,6 +316,7 @@ static int waitForHttpStatusCode() {
                statusCode         = atoi(token);
                statusCodeReceived = true;
                ESP_LOGI(GSM_MODULE_TAG, "status code: %d", statusCode);
+               logRedirectionLocation(statusCode);
             }       
          }
       }
