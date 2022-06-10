@@ -22,7 +22,7 @@
 #define COLON                      0x3A
 #define PIPE_CHAR                  0x7c
 #define CRLF                       "\r\n"
-#define RESPONSE_BUFFER_SIZE       128
+#define RESPONSE_BUFFER_SIZE       1000
 #define OK_RESPONSE                "OK"
 #define NULL_BYTE_LENGTH           1
 #define MAX_INPUT_TIME_MS          3000

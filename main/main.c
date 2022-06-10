@@ -1,5 +1,6 @@
-#include <string.h>
 #include <math.h>
+#include <string.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "esp_sleep.h"
@@ -13,6 +14,7 @@
 #include "driver/adc.h"
 #include "sdkconfig.h"
 
+#include "Messages.h"
 #include "ErrorMessages.h"
 #include "GsmModule.h"
 #include "MessageFormatter.h"
@@ -51,10 +53,13 @@ uint16_t anemometerPulses[MEASUREMENTS_PER_PUBLISHMENT];
 uint16_t directionVaneValues[MEASUREMENTS_PER_PUBLISHMENT];
 size_t nextIndex = 0;
 
+PENDING_MESSAGES pendingMessages;
+
 uint16_t pulseCount;
 
 static xQueueHandle anemometerQueue;
 static bool sendMeasuredValues = false;
+static time_t timeOfPreviousMessage;
 
 static void sleepMs(TickType_t durationInMs) {
    vTaskDelay( durationInMs / portTICK_PERIOD_MS);
@@ -112,13 +117,27 @@ static void sendMeasuredValuesToServer() {
       ESP_LOGW(TAG, "not yet delivered errorMessages = %s", errorMessages);
    }
 
-   char* jsonMessage = createJsonPayload(anemometerPulses, directionVaneValues, MEASUREMENTS_PER_PUBLISHMENT);
+   uint16_t secondSincePreviousMessage = 0;
+   time_t now = time(NULL);
+      
+   if (pendingMessages.count == 0) {
+      timeOfPreviousMessage = now;
+   } else {
+      secondSincePreviousMessage = now - timeOfPreviousMessage;
+      timeOfPreviousMessage = now;
+   }
+   char* jsonMessage = createJsonPayload(anemometerPulses, directionVaneValues, MEASUREMENTS_PER_PUBLISHMENT, secondSincePreviousMessage);
    ESP_LOGI(TAG, "json message length = %d", strlen(jsonMessage));
-
+   addToPendingMessages(&pendingMessages, jsonMessage);
+   free(jsonMessage);
+   ESP_LOGI(TAG, "%d message(s) pending", pendingMessages.count);
+   char* jsonEnvelope = createJsonEnvelope(&pendingMessages);
+   ESP_LOGI(TAG, "total message length = %d", strlen(jsonEnvelope));
+   
    int httpResponseCode = 0;
    for (int retries = 0; retries < 2 && httpResponseCode != OK_RESPONSE; retries++) {
       
-      httpResponseCode = send(CONFIG_WINDSENSOR_SERVICE_URL, jsonMessage);
+      httpResponseCode = send(CONFIG_WINDSENSOR_SERVICE_URL, jsonEnvelope);
       
       if (httpResponseCode != OK_RESPONSE && httpResponseCode != 0) {
          if (httpResponseCode == -1) {
@@ -133,14 +152,16 @@ static void sendMeasuredValuesToServer() {
 
    if (httpResponseCode == OK_RESPONSE) {
       clearErrorMessages();
+      clearPendingMessages(&pendingMessages);
    }
 
-   free(jsonMessage);
+   free(jsonEnvelope);
 }
 
-void app_main() {   
+void app_main() {  
    pulseCount = 0;
    resetMeasuredValues();
+   initializePendingMessages(&pendingMessages);
    
    sleepMs(2000);
    initializeGsmModule();
@@ -149,13 +170,13 @@ void app_main() {
    if (anemometerQueue == NULL) {
       ESP_LOGE(TAG, "failed to create queue for anemometer pulses");
    }
-   xTaskCreate(debouceTask, "anemometerInputDebouceTask", 2048, NULL, 10, NULL);
+   xTaskCreate(debouceTask, "anemometerInputDebouceTask", 4096, NULL, 10, NULL);
       
    initializeAnemometerInputPin();
    initializeDirectionVanePin();
 
-   xTaskCreate(valueCollectorTask, "valueCollectorTask", 2048, NULL, 10, NULL);
-
+   xTaskCreate(valueCollectorTask, "valueCollectorTask", 4096, NULL, 10, NULL);
+   
    for(;;) {
       sleepMs(250);
       if (sendMeasuredValues) {
