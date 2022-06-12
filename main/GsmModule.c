@@ -8,25 +8,27 @@
 #include "GsmModule.h"
 #include "Utils.h"
 
-#define UART_PORT                  UART_NUM_2
-#define IO_PIN_FOR_PWRKEY          GPIO_NUM_2
-#define IO_PIN_FOR_RELAIS          GPIO_NUM_4
-#define MILLIS_PER_SECOND          1000
-#define SECONDS(value)             (value * MILLIS_PER_SECOND) 
-#define PWR_PIN_HIGH_DURATION      SECONDS(2)
-#define RELAIS_ACTIVE_DURATION     SECONDS(2)
-#define ON_ERROR_RECORD(msg)       if (!gsmModuleReplied) {addErrorMessage(msg);return false;} 
-#define CR                         0x0d
-#define LF                         0x0a
-#define SPACE                      0x20
-#define COLON                      0x3A
-#define PIPE_CHAR                  0x7c
-#define CRLF                       "\r\n"
-#define RESPONSE_BUFFER_SIZE       1000
-#define OK_RESPONSE                "OK"
-#define NULL_BYTE_LENGTH           1
-#define MAX_INPUT_TIME_MS          3000
-
+#define UART_PORT                                     UART_NUM_2
+#define IO_PIN_FOR_PWRKEY                             GPIO_NUM_2
+#define IO_PIN_FOR_RELAIS                             GPIO_NUM_4
+#define MILLIS_PER_SECOND                             1000
+#define SECONDS(value)                                (value * MILLIS_PER_SECOND) 
+#define PWR_PIN_HIGH_DURATION                         SECONDS(2)
+#define RELAIS_ACTIVE_DURATION                        SECONDS(2)
+#define POWER_OFF_DURATION                            SECONDS(5)
+#define ON_ERROR_RECORD(msg)                          if (!gsmModuleReplied) {addErrorMessage(msg);return false;} 
+#define CR                                            0x0d
+#define LF                                            0x0a
+#define SPACE                                         0x20
+#define COLON                                         0x3A
+#define PIPE_CHAR                                     0x7c
+#define CRLF                                          "\r\n"
+#define RESPONSE_BUFFER_SIZE                          1000
+#define OK_RESPONSE                                   "OK"
+#define NULL_BYTE_LENGTH                              1
+#define MAX_INPUT_TIME_MS                             3000
+#define HTTP_OK                                       200
+#define FAILED_SEND_ATTEMPTS_TO_RESTART_GSM_MODULE    10
 typedef struct {
    int count;
    const char **commands;
@@ -42,6 +44,7 @@ typedef enum stat {
 static char responseBuffer[RESPONSE_BUFFER_SIZE];
 static bool uartAndGpioInitialized = false;
 static bool baudrateConfigured     = false;
+static int failedSendAttempts      = 0;
 
 static const char* GSM_MODULE_TAG = "GSM-module";
 
@@ -630,5 +633,20 @@ int send(const char* url, const char* data)
    }
 
    powerOffGsmModule();
+
+   if (httpStatusCode != HTTP_OK) {
+      failedSendAttempts++;
+   } else {
+      failedSendAttempts = 0;
+   }
+ 
+   if (failedSendAttempts >= FAILED_SEND_ATTEMPTS_TO_RESTART_GSM_MODULE) {
+      ESP_LOGI(GSM_MODULE_TAG, "number (%d) of maximum failed send attempts reached -> interrupting power supply of gsm module ...", FAILED_SEND_ATTEMPTS_TO_RESTART_GSM_MODULE);
+      activateRelaisFor(POWER_OFF_DURATION);
+      failedSendAttempts = 0;
+      baudrateConfigured = false;
+      addErrorMessage("GSM_MODULE_RESET_POWER");
+   }
+   
    return httpStatusCode;
 }
