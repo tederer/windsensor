@@ -1,4 +1,5 @@
 #include <string.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "driver/gpio.h"
@@ -15,7 +16,7 @@
 #define SECONDS(value)                                (value * MILLIS_PER_SECOND) 
 #define PWR_PIN_HIGH_DURATION                         SECONDS(2)
 #define RELAIS_ACTIVE_DURATION                        SECONDS(2)
-#define POWER_OFF_DURATION                            SECONDS(5)
+#define MODULE_POWER_SUPPLY_OFF_DURATION              SECONDS(5)
 #define ON_ERROR_RECORD(msg)                          if (!gsmModuleReplied) {addErrorMessage(msg);return false;} 
 #define CR                                            0x0d
 #define LF                                            0x0a
@@ -27,8 +28,11 @@
 #define OK_RESPONSE                                   "OK"
 #define NULL_BYTE_LENGTH                              1
 #define MAX_INPUT_TIME_MS                             3000
-#define HTTP_OK                                       200
+#define HTTP_RESPONSE_OK                              200
+#define HTTP_RESPONSE_ERROR                           0
 #define FAILED_SEND_ATTEMPTS_TO_RESTART_GSM_MODULE    10
+#define ONE_DAY_IN_SECONDS                            (24 * 60 * 60)
+
 typedef struct {
    int count;
    const char **commands;
@@ -44,7 +48,9 @@ typedef enum stat {
 static char responseBuffer[RESPONSE_BUFFER_SIZE];
 static bool uartAndGpioInitialized = false;
 static bool baudrateConfigured     = false;
+static bool gsmModuleReady         = false;
 static int failedSendAttempts      = 0;
+static time_t moduleReadyTime      = 0;
 
 static const char* GSM_MODULE_TAG = "GSM-module";
 
@@ -456,13 +462,13 @@ static bool waitForNetworkRegistration() {
    return registeredSuccessfully;
 }
 
-static void powerOffGsmModule() {
-   ESP_LOGI(GSM_MODULE_TAG, "--- power off via command ...");
+static void powerDownGsmModule() {
+   ESP_LOGI(GSM_MODULE_TAG, "--- power down via command ...");
    sendCommand("AT+CPOWD=1");
    GsmStatus status = assertResponse("NORMAL POWER DOWN", SECONDS(1));
 
    if (status != GSM_OK) {
-      ESP_LOGI(GSM_MODULE_TAG, "--- power off via pin ...");
+      ESP_LOGI(GSM_MODULE_TAG, "--- power down via pin ...");
       setPwrPinHighFor(PWR_PIN_HIGH_DURATION);
       assertResponse("NORMAL POWER DOWN", SECONDS(5));
    }
@@ -507,24 +513,29 @@ bool sendHttpPostRequest(const char* url, const char* data) {
    return sentSuccessfully;
 }
 
-static bool activateGsmModule() {
-   bool moduleIsAvailable = false;
+static void activateGsmModule() {
+   if (!baudrateConfigured) {
+      return;
+   }
+
+   bool isReady = false;
 
    size_t maxRetries = 2;
-   for (size_t retry = 0; retry < maxRetries && !moduleIsAvailable; retry++) {
-      moduleIsAvailable = waitForGsmModuleToGetAvailable();
-      if (!moduleIsAvailable && (retry < (maxRetries - 1))) {
+   for (size_t retry = 0; retry < maxRetries && !isReady; retry++) {
+      isReady = waitForGsmModuleToGetAvailable();
+      if (!isReady && (retry < (maxRetries - 1))) {
          ESP_LOGI(GSM_MODULE_TAG, "interrupting power supply of GSM module for %d ms ...", RELAIS_ACTIVE_DURATION);
          addErrorMessage("GSM_MODULE_INTERRUPT_POWER");
          activateRelaisFor(RELAIS_ACTIVE_DURATION);
          waitTillGsmModuleAcceptsPowerKey();
       }
-      if(moduleIsAvailable) {
-         moduleIsAvailable = waitForNetworkRegistration();
+      if(isReady) {
+         isReady = waitForNetworkRegistration();
       }
    }
 
-   return moduleIsAvailable;
+   moduleReadyTime = isReady ? time(NULL) : 0;
+   gsmModuleReady  = isReady;
 }
 
 static void configureBaudrateOfGsmModule() {
@@ -551,7 +562,7 @@ static void configureBaudrateOfGsmModule() {
          setPwrPinHighFor(PWR_PIN_HIGH_DURATION);
          for(int j = 0; (j < 10) && (status != GSM_OK); j++) {
             sendCommand("AT");
-            status = assertResponse("OK", 500);
+            status = assertResponse("OK", 1000);
          }
       }
    }
@@ -582,11 +593,21 @@ static void configureBaudrateOfGsmModule() {
    baudrateConfigured = (status == GSM_OK);
    if (baudrateConfigured) {
       ESP_LOGI(GSM_MODULE_TAG, "successfully set baudrate of gsm module");
-      powerOffGsmModule();
+      powerDownGsmModule();
    } else {
       addErrorMessage("GSM_MODULE_FAILED_TO_SET_BAUDRATE");
       ESP_LOGE(GSM_MODULE_TAG, "failed to set baudrate of gsm module");   
    }   
+}
+
+static void interruptPowerSupply() {
+   if (gsmModuleReady) {
+      powerDownGsmModule();
+   }
+   activateRelaisFor(MODULE_POWER_SUPPLY_OFF_DURATION);
+   failedSendAttempts = 0;
+   baudrateConfigured = false;
+   gsmModuleReady     = false;
 }
 
 void initializeGsmModule() {
@@ -605,14 +626,19 @@ void initializeGsmModule() {
 
 int send(const char* url, const char* data)
 {        
-   int httpStatusCode = 0;
+   int httpStatusCode = HTTP_RESPONSE_ERROR;
    responseBuffer[0] = 0;
 
-   initializeGsmModule();
+   if (!gsmModuleReady) {
+      initializeGsmModule();
+      activateGsmModule();
+   }
    
-   ESP_ERROR_CHECK(uart_flush(UART_PORT));
-   
-   if (baudrateConfigured && activateGsmModule()) {
+   if (!gsmModuleReady) {
+      ESP_LOGE(GSM_MODULE_TAG, "gsm module not ready -> interrupting power supply of gsm module ...");
+      addErrorMessage("GSM_MODULE_NOT_READY");
+      interruptPowerSupply();
+   } else { 
       ESP_LOGI(GSM_MODULE_TAG, "--- initializing bearer ...");
       if (!executeCommands(&initBearerCommands)) {
          addErrorMessage("GSM_MODULE_FAILED_TO_INIT_BEARER");
@@ -632,20 +658,23 @@ int send(const char* url, const char* data)
       }
    }
 
-   powerOffGsmModule();
-
-   if (httpStatusCode != HTTP_OK) {
-      failedSendAttempts++;
-   } else {
+   if (httpStatusCode == HTTP_RESPONSE_OK) {
       failedSendAttempts = 0;
+   } else {
+      failedSendAttempts++;
    }
  
+   time_t moduleReadyDurationInSeconds = time(NULL) - moduleReadyTime;
+
+   if (gsmModuleReady && moduleReadyDurationInSeconds >= ONE_DAY_IN_SECONDS) {
+      ESP_LOGI(GSM_MODULE_TAG, "performing daily restart of gsm module ...");
+      interruptPowerSupply();
+   }
+   
    if (failedSendAttempts >= FAILED_SEND_ATTEMPTS_TO_RESTART_GSM_MODULE) {
       ESP_LOGI(GSM_MODULE_TAG, "number (%d) of maximum failed send attempts reached -> interrupting power supply of gsm module ...", FAILED_SEND_ATTEMPTS_TO_RESTART_GSM_MODULE);
-      activateRelaisFor(POWER_OFF_DURATION);
-      failedSendAttempts = 0;
-      baudrateConfigured = false;
       addErrorMessage("GSM_MODULE_RESET_POWER");
+      interruptPowerSupply();
    }
    
    return httpStatusCode;
