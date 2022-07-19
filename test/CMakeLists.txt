@@ -12,3 +12,6 @@ target_link_libraries(messageFormatterTest errorMessagesLib messagesLib messageF
 
 add_executable(errorMessagesTest ErrorMessagesTest.c)
 target_link_libraries(errorMessagesTest errorMessagesLib)
+
+add_executable(messagesTest MessagesTest.c)
+target_link_libraries(messagesTest messagesLib)

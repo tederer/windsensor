@@ -62,15 +62,18 @@ int main(int argc, char* argv[]) {
    assertMessageIsEqualTo(0, "hello world");
 
    char text[10];
-   for(int i = 0; i < 20; i++) {
+   int numberOfMessagesToAdd = 20;
+
+   for(int i = 1; i <= numberOfMessagesToAdd; i++) {
       sprintf(text, "test %d", i);
       addToPendingMessages(&pendingMessages, text);
    }
 
-   assertPendingMessagesContainsMessageCount(15);
-   for (int i = 5; i < 20; i++) {
-      sprintf(text, "test %d", i);
-      assertMessageIsEqualTo(i - 5, text);
+   assertPendingMessagesContainsMessageCount(MAX_NUMBER_OF_MESSAGES_TO_KEEP);
+
+   for (int i = 0; i < MAX_NUMBER_OF_MESSAGES_TO_KEEP; i++) {
+      sprintf(text, "test %d", numberOfMessagesToAdd - (MAX_NUMBER_OF_MESSAGES_TO_KEEP - 1) + i);
+      assertMessageIsEqualTo(i, text);
    }
 
    return 0;

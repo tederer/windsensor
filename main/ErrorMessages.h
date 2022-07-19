@@ -1,6 +1,8 @@
 #ifndef windsensor_error_messages_h
 #define windsensor_error_messages_h
 
+#define MAX_ERROR_MESSAGES_LENGTH      300
+
 /**
  * Clears the stored error messages. This method typically gets called when stored error messages got delivered sucessfully.
  **/

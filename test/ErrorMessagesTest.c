@@ -42,28 +42,23 @@ int main(int argc, char* argv[]) {
    
 
    clearErrorMessages();
-   for(int i = 0; i < 99; i++) {
+   char maxLengthMessage[MAX_ERROR_MESSAGES_LENGTH + 1];
+   char *writePosition = maxLengthMessage;
+
+   for(int i = 0; i < MAX_ERROR_MESSAGES_LENGTH; i++) {
       char error[2];
-      sprintf(error, "%d", i % 10);
-      addErrorMessage(error);
+      sprintf(writePosition++, "%d", i % 10);
    }
-   addErrorMessage("ab");
-   expected = "0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,ab";
+   *writePosition = 0;
+
+   addErrorMessage(maxLengthMessage);
    message  = getErrorMessages();
-   assertEqual(message, expected, "maximum number of characters is 200");
+   assertEqual(message, maxLengthMessage, "maximum number of characters");
    
-
-   clearErrorMessages();
-   for(int i = 0; i < 19; i++) {
-      char error[11];
-      sprintf(error, "%c123456789", 'a' + i);
-      addErrorMessage(error);
-   }
-   expected = "a123456789,b123456789,c123456789,d123456789,e123456789,f123456789,g123456789,h123456789,i123456789,j123456789,k123456789,l123456789,m123456789,n123456789,o123456789,p123456789,q123456789,r123456789";
+   addErrorMessage("a");
    message  = getErrorMessages();
-   assertEqual(message, expected, "added error gets ignore if it is to long");
+   assertEqual(message, maxLengthMessage, "added error gets ignore if it is to long");
   
-
    clearErrorMessages();
    addErrorMessage("0123456789");
    addErrorMessage("foo");

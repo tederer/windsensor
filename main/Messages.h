@@ -1,7 +1,7 @@
 #ifndef windsensor_messages_h
 #define windsensor_messages_h
 
-#define MAX_NUMBER_OF_MESSAGES_TO_KEEP 5
+#define MAX_NUMBER_OF_MESSAGES_TO_KEEP 10
 
 typedef struct {
    int count;

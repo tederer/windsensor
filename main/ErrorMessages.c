@@ -2,8 +2,6 @@
 
 #include "ErrorMessages.h"
 
-#define MAX_ERROR_MESSAGES_LENGTH      300
-
 static const char ERROR_MESSAGE_SEPARATOR   = ',';
 
 static char errorMessages[MAX_ERROR_MESSAGES_LENGTH + 1];

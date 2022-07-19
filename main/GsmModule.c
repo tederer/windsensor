@@ -30,7 +30,7 @@
 #define MAX_INPUT_TIME_MS                             3000
 #define HTTP_RESPONSE_OK                              200
 #define HTTP_RESPONSE_ERROR                           0
-#define FAILED_SEND_ATTEMPTS_TO_RESTART_GSM_MODULE    10
+#define FAILED_SEND_ATTEMPTS_TO_RESTART_GSM_MODULE    4
 #define ONE_DAY_IN_SECONDS                            (24 * 60 * 60)
 
 typedef struct {
