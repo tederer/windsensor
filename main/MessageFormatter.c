@@ -1,10 +1,11 @@
 #include <stdbool.h>
 #include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "MessageFormatter.h"
 #include "ErrorMessages.h"
+#include "Memory.h"
 
 #define MAX_MESSAGE_SEQUENCE_ID        999
 #define MESSAGE_VERSION                "2.0.0"
@@ -25,8 +26,8 @@ char* createJsonPayload(const uint16_t *anemometerPulses, const uint16_t *direct
    int separatorCount                    = (measurementCount > 0) ? measurementCount - 1 : 0;
    int maxDataLengthInDigits             = (measurementCount * maxDecimalDigitsPerValue) + separatorCount;
    int maxDataLengthInBytes              = (maxDataLengthInDigits * sizeof(char)) + NULL_BYTE_LENGTH;
-   char *anemometerData                  = malloc(maxDataLengthInBytes);
-   char *directionVaneData               = malloc(maxDataLengthInBytes);
+   char *anemometerData                  = allocate(maxDataLengthInBytes);
+   char *directionVaneData               = allocate(maxDataLengthInBytes);
    char *anemometerDataPosition          = anemometerData;
    char *directionVaneDataPosition       = directionVaneData;
 
@@ -40,10 +41,11 @@ char* createJsonPayload(const uint16_t *anemometerPulses, const uint16_t *direct
    }
    
    int maxPayloadLength = lengthWithoutPlaceholders(format) + strlen(anemometerData) + strlen(directionVaneData) + secondsSincePreviousMessageDigits;
-   char *payload = malloc((maxPayloadLength * sizeof(char)) + NULL_BYTE_LENGTH);
+   char *payload = allocate((maxPayloadLength * sizeof(char)) + NULL_BYTE_LENGTH);
    sprintf(payload, format, anemometerData, directionVaneData, secondsSincePreviousMessage);
    free(directionVaneData);
    free(anemometerData);
+   
    return payload;
 }
 
@@ -58,16 +60,16 @@ char* createJsonEnvelope(PENDING_MESSAGES *pendingMessages) {
    int errorCount                   = noErrors ? 0: countSubstrings(errors, errorSeparatorAsString) + 1;
    int doubleQuotesCount            = 2 * errorCount;
    int errorsDataLengthInBytes      = (noErrors ? 0 : strlen(errors) + doubleQuotesCount) + NULL_BYTE_LENGTH;
-   char *errorsData                 = malloc(errorsDataLengthInBytes);
+   char *errorsData                 = allocate(errorsDataLengthInBytes);
    
-   int messageSeparatorCount        = pendingMessages->count - 1;
+   int messageSeparatorCount        = (pendingMessages->count < 2) ? 0 : pendingMessages->count - 1;
    int messagesLength               = strlen("[]") + messageSeparatorCount;
 
    for (int i = 0; i < pendingMessages->count; i++) {
       messagesLength += strlen(pendingMessages->message[i]);
    }
 
-   char *messagesData               = malloc(messagesLength * sizeof(char) + NULL_BYTE_LENGTH);
+   char *messagesData               = allocate(messagesLength * sizeof(char) + NULL_BYTE_LENGTH);
    char *messagesPosition           = messagesData;
    *messagesPosition                = 0;
 
@@ -81,7 +83,7 @@ char* createJsonEnvelope(PENDING_MESSAGES *pendingMessages) {
    
    *errorsData = 0;
    int offset  = 0;
-   char *copyOfErrors = malloc(strlen(errors) + 1); // this copy is needed because strtok inserts null characters at the end of each token
+   char *copyOfErrors = allocate(strlen(errors) + 1); // this copy is needed because strtok inserts null characters at the end of each token
    strcpy(copyOfErrors, errors);
    
    char* token = strtok(copyOfErrors, errorSeparatorAsString);
@@ -94,7 +96,7 @@ char* createJsonEnvelope(PENDING_MESSAGES *pendingMessages) {
    }
    int payloadLength = lengthWithoutPlaceholders(format) + strlen(MESSAGE_VERSION) + maxSequenceIdDigits + strlen(messagesData) + strlen(errorsData);
    int payloadSizeInBytes = (payloadLength * sizeof(char)) + NULL_BYTE_LENGTH;
-   char *payload = malloc(payloadSizeInBytes);
+   char *payload = allocate(payloadSizeInBytes);
    sprintf(payload, format, MESSAGE_VERSION, getNextSequenceId(), messagesData, errorsData);
    free(copyOfErrors);
    free(messagesData);

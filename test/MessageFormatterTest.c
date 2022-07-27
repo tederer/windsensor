@@ -7,6 +7,7 @@
 #include "../main/MessageFormatter.h"
 #include "../main/ErrorMessages.h"
 #include "../main/Messages.h"
+#include "TestingMemory.h"
 
 static PENDING_MESSAGES pendingMessages;
 
@@ -15,6 +16,14 @@ static void assertEqual(char const * actual, char const * expected, char const *
       printf("ERROR: %s\n", description);
       printf("\texpected: %s\n", expected);
       printf("\tactual  : %s\n\n", actual);
+   }
+}
+
+static void assertIntEqual(int actual, int expected, char const * description) {
+   if (actual != expected) {
+      printf("ERROR: %s\n", description);
+      printf("\texpected: %d\n", expected);
+      printf("\tactual  : %d\n\n", actual);
    }
 }
 
@@ -30,7 +39,7 @@ int main(int argc, char* argv[]) {
    }
 
    clearErrorMessages();
-
+   
    char *expected = "{\"anemometerPulses\":[],\"directionVaneValues\":[],\"secondsSincePreviousMessage\":0}";
    char *message  = createJsonPayload(anemometerPulses, directionVaneValues, 0, 0);	
    assertEqual(message, expected, "empty message");
@@ -78,6 +87,7 @@ int main(int argc, char* argv[]) {
    free(envelope);
    
    clearPendingMessages(&pendingMessages);
+   clearErrorMessages();
    addErrorMessage("error I");
    expected = "{\"version\":\"2.0.0\",\"sequenceId\":1,\"messages\":[],\"errors\":[\"error I\"]}";
    envelope = createJsonEnvelope(&pendingMessages);
@@ -89,6 +99,74 @@ int main(int argc, char* argv[]) {
    envelope = createJsonEnvelope(&pendingMessages);
    assertEqual(envelope, expected, "message with another error");
    free(envelope);
+
+   resetTestingMemory();
+   clearPendingMessages(&pendingMessages);
+   clearErrorMessages();
+
+   int expectedErrorsDataLength  = 1;
+   int expectedMessagesLength    = 13;
+   int expectedErrorsLength      = 1;
+   int expectedTotalLength       = 73;
+
+   addToPendingMessages(&pendingMessages, "0123456789");
+   envelope = createJsonEnvelope(&pendingMessages);
+   assertIntEqual(getTestingMemoryInvocationCount(), 4, "createJsonEnvelope: memory allocation (A)");
+   assertIntEqual(getTestingMemoryInvocation(0), expectedErrorsDataLength, "createJsonEnvelope: memory allocation (A) - errorsDataLength");
+   assertIntEqual(getTestingMemoryInvocation(1), expectedMessagesLength,   "createJsonEnvelope: memory allocation (A) - messagesLength");
+   assertIntEqual(getTestingMemoryInvocation(2), expectedErrorsLength,     "createJsonEnvelope: memory allocation (A) - errorsLength");
+   assertIntEqual(getTestingMemoryInvocation(3), expectedTotalLength,      "createJsonEnvelope: memory allocation (A) - totalLength");
+   free(envelope);
+
+   resetTestingMemory();
+   clearPendingMessages(&pendingMessages);
+   clearErrorMessages();
+
+   expectedErrorsDataLength  = 9;
+   expectedMessagesLength    = 3;
+   expectedErrorsLength      = 7;
+   expectedTotalLength       = 71;
+
+   addErrorMessage("123456");
+   envelope = createJsonEnvelope(&pendingMessages);
+   assertIntEqual(getTestingMemoryInvocationCount(), 4, "createJsonEnvelope: memory allocation (B)");
+   assertIntEqual(getTestingMemoryInvocation(0), expectedErrorsDataLength, "createJsonEnvelope: memory allocation (B) - errorsDataLength");
+   assertIntEqual(getTestingMemoryInvocation(1), expectedMessagesLength,   "createJsonEnvelope: memory allocation (B) - messagesLength");
+   assertIntEqual(getTestingMemoryInvocation(2), expectedErrorsLength,     "createJsonEnvelope: memory allocation (B) - errorsLength");
+   assertIntEqual(getTestingMemoryInvocation(3), expectedTotalLength,      "createJsonEnvelope: memory allocation (B) - totalLength");
+   free(envelope);
+
+   resetTestingMemory();
+   clearPendingMessages(&pendingMessages);
+   clearErrorMessages();
+
+   expectedErrorsDataLength  = 13;
+   expectedMessagesLength    = 9;
+   expectedErrorsLength      = 9;
+   expectedTotalLength       = 81;
+   
+   addToPendingMessages(&pendingMessages, "123");
+   addToPendingMessages(&pendingMessages, "45");
+   addErrorMessage("123456");
+   addErrorMessage("7");
+   envelope = createJsonEnvelope(&pendingMessages);
+   assertIntEqual(getTestingMemoryInvocationCount(), 4, "createJsonEnvelope: memory allocation (C)");
+   assertIntEqual(getTestingMemoryInvocation(0), expectedErrorsDataLength, "createJsonEnvelope: memory allocation (C) - errorsDataLength");
+   assertIntEqual(getTestingMemoryInvocation(1), expectedMessagesLength,   "createJsonEnvelope: memory allocation (C) - messagesLength");
+   assertIntEqual(getTestingMemoryInvocation(2), expectedErrorsLength,     "createJsonEnvelope: memory allocation (C) - errorsLength");
+   assertIntEqual(getTestingMemoryInvocation(3), expectedTotalLength,      "createJsonEnvelope: memory allocation (C) - totalLength");
+   free(envelope);
+
+   resetTestingMemory();
+   int expectedAnemometerDataLength    = 360;
+   int expectedDirectionVaneDataLength = 360;
+   expectedTotalLength                 = 480;
+
+   message = createJsonPayload(anemometerPulses, directionVaneValues, 60, 126);	
+   assertIntEqual(getTestingMemoryInvocation(0), expectedAnemometerDataLength,      "createJsonPayload: memory allocation - anemometerDataLength");
+   assertIntEqual(getTestingMemoryInvocation(1), expectedDirectionVaneDataLength,   "createJsonPayload: memory allocation - directionVaneDataLength");
+   assertIntEqual(getTestingMemoryInvocation(2), expectedTotalLength,               "createJsonPayload: memory allocation - totalLength");
+   free(message);
 
    return 0;
 }

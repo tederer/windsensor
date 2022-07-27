@@ -2,9 +2,10 @@ cmake_minimum_required(VERSION 3.10)
 
 project(esp32-windsensor-tests)
 
+add_library(testingMemoryLib TestingMemory.c)
 add_library(errorMessagesLib ../main/ErrorMessages.c)
 add_library(messageFormatterLib ../main/MessageFormatter.c)
-target_link_libraries(messageFormatterLib errorMessagesLib)
+target_link_libraries(messageFormatterLib errorMessagesLib testingMemoryLib)
 add_library(messagesLib ../main/Messages.c)
 
 add_executable(messageFormatterTest MessageFormatterTest.c)

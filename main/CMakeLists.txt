@@ -1,4 +1,4 @@
-set(COMPONENT_SRCS "main.c" "GsmModule.c" "wifi.c" "ErrorMessages.c" "MessageFormatter.c" "Utils.c" "Messages.c")
+set(COMPONENT_SRCS "main.c" "GsmModule.c" "wifi.c" "ErrorMessages.c" "MessageFormatter.c" "Utils.c" "Messages.c" "Memory.c")
 set(COMPONENT_ADD_INCLUDEDIRS "")
 set(COMPONENT_REQUIRES soc nvs_flash ulp esp_http_client)
 
